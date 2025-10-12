@@ -6,6 +6,8 @@ blueprint:
     - In Winter: Sets a climate device to "building_protection" when a sensor is open, and back to "comfort" when all are closed.
     
     - In Summer: Turns off an AC unit when a sensor is open (and remembers it was on), then turns it back on when all sensors are closed.
+    
+    version: 0.1
   domain: automation
   author: MrHollow
   source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/automation/blueprints/motion_light.yaml
