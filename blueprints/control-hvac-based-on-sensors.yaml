@@ -5,8 +5,8 @@ blueprint:
     - In Winter: Sets a climate device to "building_protection" when a sensor is open, and back to "comfort" when all are closed.
     - In Summer: Turns off an AC unit when a sensor is open (and remembers it was on), then turns it back on when all sensors are closed.
   domain: automation
-  source_url: https://github.com/MrHollowX/homeassistant/blueprints/control-hvac-based-on-sensors.yaml
   author: MrHollow
+  source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/automation/blueprints/motion_light.yaml
   input:
     opening_sensors:
       name: Opening Sensors
@@ -51,6 +51,7 @@ blueprint:
 
 variables:
   opening_sensors: !input opening_sensors
+  summer_climate_device: !input summer_climate_device
 
 trigger:
   - platform: state
@@ -83,7 +84,7 @@ action:
                     entity_id: !input season_selector
                     state: "on"
                   - condition: template
-                    value_template: "{{ not is_state(!input summer_climate_device, 'off') }}"
+                    value_template: "{{ not is_state(summer_climate_device, 'off') }}"
                 sequence:
                   - service: climate.turn_off
                     target:
