@@ -8,6 +8,7 @@ blueprint:
     - In Summer: Turns off an AC unit when a sensor is open (and remembers it was on), then turns it back on when all sensors are closed.
     
     version: 0.1
+  icon: mdi:sun-snowflake
   domain: automation
   author: MrHollow
   source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/automation/blueprints/motion_light.yaml
