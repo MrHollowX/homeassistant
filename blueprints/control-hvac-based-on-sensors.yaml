@@ -1,0 +1,129 @@
+blueprint:
+  name: HVAC Control on Door/Window State
+  description: >-
+    Manages HVAC based on the state of specified door/window sensors and the current season.
+    - In Winter: Sets a climate device to "building_protection" when a sensor is open, and back to "comfort" when all are closed.
+    - In Summer: Turns off an AC unit when a sensor is open (and remembers it was on), then turns it back on when all sensors are closed.
+  domain: automation
+  source_url: https://github.com/MrHollowX/homeassistant/blueprints/control-hvac-based-on-sensors.yaml
+  author: MrHollow
+  input:
+    opening_sensors:
+      name: Opening Sensors
+      description: The door and/or window sensors to monitor.
+      selector:
+        entity:
+          multiple: true
+          domain: binary_sensor
+    open_delay:
+      name: Open Delay
+      description: The time in seconds to wait after a sensor opens before running the "open" actions.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: seconds
+    season_selector:
+      name: Season Selector (Input Boolean)
+      description: An Input Boolean helper that is 'on' for summer and 'off' for winter.
+      selector:
+        entity:
+          domain: input_boolean
+    winter_climate_device:
+      name: Winter Climate Device
+      description: The heater/climate entity to control in the winter.
+      selector:
+        entity:
+          domain: climate
+    summer_climate_device:
+      name: Summer Climate Device (AC)
+      description: The AC/climate entity to control in the summer.
+      selector:
+        entity:
+          domain: climate
+    summer_ac_last_state_helper:
+      name: Summer AC "Last State" Helper
+      description: An Input Boolean used to remember if the AC was on before a sensor was opened.
+      selector:
+        entity:
+          domain: input_boolean
+
+variables:
+  opening_sensors: !input opening_sensors
+
+trigger:
+  - platform: state
+    entity_id: !input opening_sensors
+    for:
+      seconds: !input open_delay
+
+action:
+  - choose:
+      # This block runs when a door or window is OPENED
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == 'on' }}"
+        sequence:
+          - choose:
+              # "Winter" actions (sensor opened)
+              - conditions:
+                  - condition: state
+                    entity_id: !input season_selector
+                    state: "off"
+                sequence:
+                  - service: climate.set_preset_mode
+                    data:
+                      preset_mode: building_protection
+                    target:
+                      entity_id: !input winter_climate_device
+              # "Summer" actions (sensor opened)
+              - conditions:
+                  - condition: state
+                    entity_id: !input season_selector
+                    state: "on"
+                  - condition: template
+                    value_template: "{{ not is_state(!input summer_climate_device, 'off') }}"
+                sequence:
+                  - service: climate.turn_off
+                    target:
+                      entity_id: !input summer_climate_device
+                  - service: input_boolean.turn_on
+                    target:
+                      entity_id: !input summer_ac_last_state_helper
+
+      # This block runs when a door or window is CLOSED and checks if ALL are closed
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == 'off' }}"
+          - condition: template
+            value_template: "{{ expand(opening_sensors) | selectattr('state', 'eq', 'off') | list | count == expand(opening_sensors) | list | count }}"
+        sequence:
+          - choose:
+              # "Winter" actions (all sensors closed)
+              - conditions:
+                  - condition: state
+                    entity_id: !input season_selector
+                    state: "off"
+                sequence:
+                  - service: climate.set_preset_mode
+                    data:
+                      preset_mode: comfort
+                    target:
+                      entity_id: !input winter_climate_device
+              # "Summer" actions (all sensors closed)
+              - conditions:
+                  - condition: state
+                    entity_id: !input season_selector
+                    state: "on"
+                  - condition: state
+                    entity_id: !input summer_ac_last_state_helper
+                    state: "on"
+                sequence:
+                  - service: climate.turn_on
+                    target:
+                      entity_id: !input summer_climate_device
+                  - service: input_boolean.turn_off
+                    target:
+                      entity_id: !input summer_ac_last_state_helper
+mode: single
