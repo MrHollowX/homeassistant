@@ -31,7 +31,7 @@ blueprint:
     close_delay:
       name: Close Delay
       description: The time in seconds to wait after a sensor closes before running the "closed" actions.
-      default: 0
+      default: 30
       selector:
         number:
           min: 0
