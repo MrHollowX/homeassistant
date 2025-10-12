@@ -2,11 +2,13 @@ blueprint:
   name: HVAC Control on Door/Window State
   description: >-
     Manages HVAC based on the state of specified door/window sensors and the current season.
+
     - In Winter: Sets a climate device to "building_protection" when a sensor is open, and back to "comfort" when all are closed.
+    
     - In Summer: Turns off an AC unit when a sensor is open (and remembers it was on), then turns it back on when all sensors are closed.
   domain: automation
-  source_url: https://github.com/MrHollowX/homeassistant/blueprints/control-hvac-based-on-sensors.yaml
   author: MrHollow
+  source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/automation/blueprints/motion_light.yaml
   input:
     opening_sensors:
       name: Opening Sensors
@@ -19,6 +21,15 @@ blueprint:
       name: Open Delay
       description: The time in seconds to wait after a sensor opens before running the "open" actions.
       default: 30
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: seconds
+    close_delay:
+      name: Close Delay
+      description: The time in seconds to wait after a sensor closes before running the "closed" actions.
+      default: 0
       selector:
         number:
           min: 0
@@ -51,12 +62,21 @@ blueprint:
 
 variables:
   opening_sensors: !input opening_sensors
+  summer_climate_device: !input summer_climate_device
 
 trigger:
+  # Trigger when a sensor has been OPEN for the specified delay
   - platform: state
     entity_id: !input opening_sensors
+    to: 'on'
     for:
       seconds: !input open_delay
+  # Trigger when a sensor has been CLOSED for the specified delay
+  - platform: state
+    entity_id: !input opening_sensors
+    to: 'off'
+    for:
+      seconds: !input close_delay
 
 action:
   - choose:
@@ -83,7 +103,7 @@ action:
                     entity_id: !input season_selector
                     state: "on"
                   - condition: template
-                    value_template: "{{ not is_state(!input summer_climate_device, 'off') }}"
+                    value_template: "{{ not is_state(summer_climate_device, 'off') }}"
                 sequence:
                   - service: climate.turn_off
                     target:
@@ -127,3 +147,4 @@ action:
                     target:
                       entity_id: !input summer_ac_last_state_helper
 mode: single
+
