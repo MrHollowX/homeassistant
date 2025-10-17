@@ -3,11 +3,11 @@ blueprint:
   description: >-
     Manages HVAC based on the state of specified door/window sensors and the current season.
 
-    - In Winter: Sets a climate device to "building_protection" when a sensor is open, and back to "comfort" when all are closed.
+    - In Winter: Sets a climate device to a specific preset mode when a sensor is open, and returns it to a closed state preset (or its previous state) when all are closed.
     
     - In Summer: Turns off an AC unit when a sensor is open (and remembers it was on), then turns it back on when all sensors are closed.
     
-    version: 0.1
+    version: 0.3
   domain: automation
   author: MrHollow
   source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/automation/blueprints/motion_light.yaml
@@ -61,19 +61,55 @@ blueprint:
       selector:
         entity:
           domain: input_boolean
+    # New Inputs for Winter Preset Mode Control
+    restore_previous_mode:
+      name: (Winter) Restore Previous Preset Mode
+      description: If ON, the blueprint will save the climate device's preset mode before changing it, and restore it when closed. If OFF, it will use the fixed dropdown values below.
+      selector:
+        boolean: {}
+      default: false
+    last_preset_helper:
+      name: (Winter) Last Preset Helper
+      description: (Required if 'Restore' is ON) The input_text helper used to store the last preset mode.
+      selector:
+        entity:
+          domain: input_text
+    open_preset_mode:
+      name: (Winter) Open Preset Mode
+      description: The preset mode to set when a sensor is opened (used if 'Restore' is OFF).
+      selector:
+        select:
+          options:
+            - "building_protection"
+            - "comfort"
+            - "economy"
+            - "standby"
+      default: "building_protection"
+    closed_preset_mode:
+      name: (Winter) Closed Preset Mode
+      description: The preset mode to set when all sensors are closed (used if 'Restore' is OFF).
+      selector:
+        select:
+          options:
+            - "building_protection"
+            - "comfort"
+            - "economy"
+            - "standby"
+      default: "comfort"
 
 variables:
   opening_sensors: !input opening_sensors
   summer_climate_device: !input summer_climate_device
+  winter_climate_device: !input winter_climate_device
+  restore_previous_mode: !input restore_previous_mode
+  last_preset_helper: !input last_preset_helper
 
 trigger:
-  # Trigger when a sensor has been OPEN for the specified delay
   - platform: state
     entity_id: !input opening_sensors
     to: 'on'
     for:
       seconds: !input open_delay
-  # Trigger when a sensor has been CLOSED for the specified delay
   - platform: state
     entity_id: !input opening_sensors
     to: 'off'
@@ -94,11 +130,22 @@ action:
                     entity_id: !input season_selector
                     state: "off"
                 sequence:
+                  - choose:
+                      # If restore mode is on, save the current state first
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ restore_previous_mode }}"
+                        sequence:
+                          - service: input_text.set_value
+                            target:
+                              entity_id: !input last_preset_helper
+                            data:
+                              value: "{{ state_attr(winter_climate_device, 'preset_mode') }}"
                   - service: climate.set_preset_mode
-                    data:
-                      preset_mode: building_protection
                     target:
                       entity_id: !input winter_climate_device
+                    data:
+                      preset_mode: !input open_preset_mode
               # "Summer" actions (sensor opened)
               - conditions:
                   - condition: state
@@ -128,11 +175,24 @@ action:
                     entity_id: !input season_selector
                     state: "off"
                 sequence:
-                  - service: climate.set_preset_mode
-                    data:
-                      preset_mode: comfort
-                    target:
-                      entity_id: !input winter_climate_device
+                  - choose:
+                      # If restore is on and the helper has a valid state, restore it
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ restore_previous_mode and states(last_preset_helper) not in ['unknown', 'unavailable', ''] }}"
+                        sequence:
+                          - service: climate.set_preset_mode
+                            target:
+                              entity_id: !input winter_climate_device
+                            data:
+                              preset_mode: "{{ states(last_preset_helper) }}"
+                    # If restore is off (or helper was empty), use the fixed closed preset
+                    default:
+                      - service: climate.set_preset_mode
+                        target:
+                          entity_id: !input winter_climate_device
+                        data:
+                          preset_mode: !input closed_preset_mode
               # "Summer" actions (all sensors closed)
               - conditions:
                   - condition: state
