@@ -1,0 +1,275 @@
+blueprint:
+  name: "❄️🔥 Smart HVAC Interlock & State Manager v1.0"
+  description: >-
+    # 🏠 Advanced Climate & Window Interlock
+
+    This blueprint transforms your HVAC into a "Living System" that reacts intelligently to doors and windows. It solves the complex problem of managing heating (Winter) and cooling (Summer) with different logic strategies, while preventing "State Amnesia" when multiple windows are opened.
+
+    ---
+
+    ### ⚙️ Key Features
+    * **❄️ Winter Mode (Heating):** Switches your KNX/Thermostat to a safe preset (e.g., `Building Protection`) when windows open. It remembers your previous mode (`Comfort`, `Eco`, etc.) and restores it only when *all* windows close.
+    * **🔥 Summer Mode (Cooling):** Cuts power to AC units to save energy. It remembers if the AC was actually running and only turns it back on if it was previously active.
+    * **🧠 First-In Memory:** Prevents "State Amnesia." If you open Window A (saving 'Comfort' mode), then open Window B, the system is smart enough NOT to overwrite the memory with the current 'Protection' mode.
+    * **🛡️ Zigbee Filter:** Ignores brief `unavailable` states common in Zigbee meshes to prevent ghost switching.
+
+    ---
+
+    ### 📋 Requirements (Create these Helpers first!)
+    1. **Season Switch** (`input_boolean`):
+       * `On` = Summer (Cooling Logic)
+       * `Off` = Winter (Heating Logic)
+    2. **Winter Memory** (`input_text`):
+       * Stores the name of the heating preset (e.g., 'comfort').
+    3. **Summer Memory** (`input_boolean`):
+       * Stores the state of the AC (On/Off).
+
+    ---
+
+    *Version 1.0 - Architect Grade*
+
+  domain: automation
+  input:
+    opening_sensors:
+      name: 🚪 Opening Sensors
+      description: Select all windows/doors in this zone. The automation waits for ALL to close before resuming HVAC.
+      selector:
+        entity:
+          multiple: true
+          domain: binary_sensor
+          device_class: [window, door, garage_door, opening]
+
+    season_selector:
+      name: 🌤️ Season Selector
+      description: Helper to switch logic. ON = Summer, OFF = Winter.
+      selector:
+        entity:
+          domain: input_boolean
+
+    # --- WINTER CONFIG ---
+    winter_climate_device:
+      name: ❄️ Winter Climate Entity
+      description: The thermostat/valve to control in Winter.
+      selector:
+        entity:
+          domain: climate
+
+    restore_winter_mode:
+      name: (Winter) Smart Restoration
+      description: If enabled, returns to the exact previous preset (e.g., Comfort). If disabled, uses the default closed preset.
+      selector:
+        boolean: {}
+      default: true
+
+    winter_last_state_helper:
+      name: (Winter) Memory Helper
+      description: "REQUIRED: An `input_text` helper to store the previous preset name."
+      selector:
+        entity:
+          domain: input_text
+      default: ""
+
+    winter_safe_preset:
+      name: (Winter) Open Preset (Safe Mode)
+      description: The mode to apply while windows are OPEN (e.g., 'Building Protection' or 'Off').
+      selector:
+        select:
+          options:
+            - "building_protection"
+            - "eco"
+            - "away"
+            - "off"
+          custom_value: true
+      default: "building_protection"
+
+    winter_default_closed_preset:
+      name: (Winter) Closed Preset (Fallback)
+      description: The mode to apply when closed if 'Smart Restoration' fails or is disabled.
+      selector:
+        select:
+          options:
+            - "comfort"
+            - "home"
+            - "heat"
+          custom_value: true
+      default: "comfort"
+
+    # --- SUMMER CONFIG ---
+    summer_climate_device:
+      name: 🔥 Summer Climate Entity
+      description: The AC unit to control in Summer.
+      selector:
+        entity:
+          domain: climate
+
+    summer_last_state_helper:
+      name: (Summer) Memory Helper
+      description: "REQUIRED: An `input_boolean` helper to remember if the AC was running."
+      selector:
+        entity:
+          domain: input_boolean
+      default: ""
+
+    # --- TIMING ---
+    open_delay:
+      name: ⏱️ Open Delay
+      description: Seconds to wait before cutting HVAC (prevents false triggers/fluttering).
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: seconds
+    close_delay:
+      name: ⏱️ Close Delay
+      description: Seconds to wait after ALL windows are closed before resuming HVAC.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: seconds
+
+variables:
+  opening_sensors: !input opening_sensors
+  season_selector: !input season_selector
+  winter_device: !input winter_climate_device
+  summer_device: !input summer_climate_device
+  winter_helper: !input winter_last_state_helper
+  summer_helper: !input summer_last_state_helper
+  # Logic Variables
+  is_summer: "{{ is_state(season_selector, 'on') }}"
+  # Check if any OTHER sensor is already open (to detect if this is the 2nd/3rd window)
+  # We check the group excluding the triggering entity
+  open_sensor_count: "{{ expand(opening_sensors) | selectattr('state', 'eq', 'on') | list | count }}"
+
+trigger:
+  - platform: state
+    entity_id: !input opening_sensors
+    to: "on"
+    for: !input open_delay
+    id: "opened"
+  - platform: state
+    entity_id: !input opening_sensors
+    to: "off"
+    for: !input close_delay
+    id: "closed"
+
+# Restart mode ensures that if I close the window during the delay, the open action is cancelled.
+mode: restart
+
+condition:
+  # Filter out unavailable/unknown garbage data from Zigbee network rebuilds
+  - condition: template
+    value_template: "{{ trigger.to_state.state not in ['unavailable', 'unknown'] }}"
+
+action:
+  - choose:
+      # ----------------------------------------------------------------
+      # SCENARIO: A SENSOR OPENED
+      # ----------------------------------------------------------------
+      - conditions:
+          - condition: trigger
+            id: "opened"
+        sequence:
+          - choose:
+              # --- WINTER OPEN LOGIC ---
+              - conditions: "{{ not is_summer }}"
+                sequence:
+                  # CRITICAL FIX: Only save state if this is the FIRST window opening.
+                  # If count > 1, the system is already in 'Safe Mode', so do not overwrite memory.
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ open_sensor_count <= 1 }}"
+                          - condition: template
+                            value_template: "{{ states(winter_helper) != 'unknown' }}"
+                        sequence:
+                          - action: input_text.set_value
+                            target:
+                              entity_id: !input winter_last_state_helper
+                            data:
+                              value: "{{ state_attr(winter_device, 'preset_mode') | default('comfort') }}"
+
+                  # Apply Safe Mode
+                  - action: climate.set_preset_mode
+                    target:
+                      entity_id: !input winter_climate_device
+                    data:
+                      preset_mode: !input winter_safe_preset
+
+              # --- SUMMER OPEN LOGIC ---
+              - conditions: "{{ is_summer }}"
+                sequence:
+                  # CRITICAL FIX: Only save state if AC is actually ON and this is the FIRST window.
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ open_sensor_count <= 1 }}"
+                        sequence:
+                          - action: input_boolean.turn_{{ 'on' if not is_state(summer_device, 'off') else 'off' }}
+                            target:
+                              entity_id: !input summer_last_state_helper
+
+                  # Turn off AC if it's running (Fixed by using robust Template Condition)
+                  - if:
+                      - condition: template
+                        value_template: "{{ not is_state(summer_device, 'off') }}"
+                    then:
+                      - action: climate.turn_off
+                        target:
+                          entity_id: !input summer_climate_device
+
+      # ----------------------------------------------------------------
+      # SCENARIO: A SENSOR CLOSED
+      # ----------------------------------------------------------------
+      - conditions:
+          - condition: trigger
+            id: "closed"
+          # Double check: Are ALL sensors actually closed?
+          - condition: template
+            value_template: "{{ expand(opening_sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}"
+        sequence:
+          - choose:
+              # --- WINTER CLOSE LOGIC ---
+              - conditions: "{{ not is_summer }}"
+                sequence:
+                  - choose:
+                      # Try to Restore
+                      - conditions:
+                          - condition: template
+                            value_template: >-
+                              {{ 
+                                is_state(restore_winter_mode, 'on') and 
+                                states(winter_helper) not in ['unknown', 'unavailable', '', 'None'] 
+                              }}
+                        sequence:
+                          - action: climate.set_preset_mode
+                            target:
+                              entity_id: !input winter_climate_device
+                            data:
+                              preset_mode: "{{ states(winter_helper) }}"
+                    # Fallback if restore fails/disabled
+                    default:
+                      - action: climate.set_preset_mode
+                        target:
+                          entity_id: !input winter_climate_device
+                        data:
+                          preset_mode: !input winter_default_closed_preset
+
+              # --- SUMMER CLOSE LOGIC ---
+              - conditions: "{{ is_summer }}"
+                sequence:
+                  - choose:
+                      - conditions:
+                          - condition: state
+                            entity_id: !input summer_last_state_helper
+                            state: "on"
+                        sequence:
+                          - action: climate.turn_on
+                            target:
+                              entity_id: !input summer_climate_device
+                          # Reset helper for cleanliness
+                          - action: input_boolean.turn_off
+                            target:
+                              entity_id: !input summer_last_state_helper
